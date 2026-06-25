@@ -75,3 +75,16 @@ O workflow Android agora instala o Android build template manualmente extraindo 
 - O workflow instala `platforms;android-35` e `build-tools;35.0.0`.
 - O Android build template recebe `android/.gdignore` para não ser importado como recurso do projeto Godot.
 - O preset Android inclui campos `keystore/*` vazios para usar os fallbacks por variáveis de ambiente do CI.
+
+
+## Versão v7 — correção do Android CI
+
+Esta versão separa o APK do AAB da forma correta para Godot:
+
+- O preset `Android APK` usa exportação Android padrão (`gradle_build/use_gradle_build=false`). Isso evita depender do Android build template e torna o APK de teste mais confiável.
+- O preset `Android AAB` usa Gradle/custom build (`gradle_build/use_gradle_build=true`), porque AAB exige custom build/Gradle no Godot.
+- O workflow instala os export templates, Android SDK 35, Build Tools 35.0.1, NDK r28b, CMake e OpenJDK 17.
+- O template Android é instalado pelo próprio Godot durante a exportação AAB usando `--install-android-build-template --export-release`, que é a forma adequada para uso por linha de comando.
+
+Para testar rapidamente no celular, use o artifact `pinguins-x-focas-debug-apk`.
+Para Play Console, use o artifact `pinguins-x-focas-release-aab` e configure os secrets da keystore real antes de publicar.
