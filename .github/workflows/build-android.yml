@@ -19,6 +19,7 @@ jobs:
       KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,7 +36,7 @@ jobs:
             libfontconfig1 \
             openjdk-17-jdk-headless
 
-      - name: Prepare Android SDK, Java and export templates
+      - name: Prepare Android SDK, Java and Godot export templates
         shell: bash
         run: |
           set -euxo pipefail
@@ -44,8 +45,8 @@ jobs:
 
           RESOLVED_ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           if [ -z "$RESOLVED_ANDROID_HOME" ] || [ ! -d "$RESOLVED_ANDROID_HOME" ]; then
-            for CANDIDATE in /opt/android-sdk /opt/android-sdk-linux /usr/lib/android-sdk "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}"; do
-              if [ -n "${CANDIDATE:-}" ] && [ -d "$CANDIDATE" ]; then
+            for CANDIDATE in /opt/android-sdk /opt/android-sdk-linux /usr/lib/android-sdk /usr/local/lib/android/sdk; do
+              if [ -d "$CANDIDATE" ]; then
                 RESOLVED_ANDROID_HOME="$CANDIDATE"
                 break
               fi
@@ -102,7 +103,7 @@ jobs:
           test -f "$TEMPLATE_DIR/android_debug.apk"
           test -f "$TEMPLATE_DIR/android_release.apk"
           test -f "$TEMPLATE_DIR/android_source.zip"
-          ls -lh "$TEMPLATE_DIR" | sed -n '1,80p'
+          ls -lh "$TEMPLATE_DIR" | sed -n '1,100p'
 
       - name: Configure Godot editor settings and keystores
         shell: bash
@@ -151,19 +152,21 @@ jobs:
             echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$RELEASE_PASSWORD"
           } >> "$GITHUB_ENV"
 
-          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
-          [gd_resource type="EditorSettings" format=3]
+          for SETTINGS_FILE in "$HOME/.config/godot/editor_settings-4.tres" "$HOME/.config/godot/editor_settings-4.6.tres"; do
+            {
+              echo '[gd_resource type="EditorSettings" format=3]'
+              echo ''
+              echo '[resource]'
+              echo "export/android/android_sdk_path = \"$ANDROID_HOME\""
+              echo "export/android/java_sdk_path = \"$JAVA_HOME\""
+              echo "export/android/debug_keystore = \"$HOME/.android/debug.keystore\""
+              echo 'export/android/debug_keystore_user = "androiddebugkey"'
+              echo 'export/android/debug_keystore_pass = "android"'
+            } > "$SETTINGS_FILE"
+          done
 
-          [resource]
-          export/android/android_sdk_path = "$ANDROID_HOME"
-          export/android/java_sdk_path = "$JAVA_HOME"
-          export/android/debug_keystore = "$HOME/.android/debug.keystore"
-          export/android/debug_keystore_user = "androiddebugkey"
-          export/android/debug_keystore_pass = "android"
-          EOF
-
-          echo "--- editor_settings-4.tres ---"
-          cat "$HOME/.config/godot/editor_settings-4.tres"
+          echo "--- editor_settings-4.6.tres ---"
+          cat "$HOME/.config/godot/editor_settings-4.6.tres"
           echo "--- export_presets.cfg ---"
           sed -n '1,240p' export_presets.cfg
 
@@ -171,7 +174,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          timeout 90s godot --headless --verbose --path . --editor --quit || true
+          timeout 120s godot --headless --verbose --path . --editor --quit || true
 
       - name: Export debug APK
         shell: bash
@@ -183,27 +186,62 @@ jobs:
           test -f "build/android/${EXPORT_NAME}-debug.apk"
           ls -lh build/android
 
-      - name: Export release AAB
-        shell: bash
-        run: |
-          set -euxo pipefail
-          rm -rf android
-          mkdir -p build/android
-          godot --headless --verbose --path . --install-android-build-template --export-release "Android AAB" "build/android/${EXPORT_NAME}-release.aab"
-          test -f "build/android/${EXPORT_NAME}-release.aab"
-          ls -lh build/android
-
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: ${{ env.EXPORT_NAME }}-debug-apk
           path: build/android/*.apk
           if-no-files-found: error
 
+      - name: Install Android build template for AAB
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf android
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}"
+
+          godot --headless --verbose --path . --install-android-build-template --quit || true
+
+          if [ ! -d android/build ]; then
+            mkdir -p android/build
+            python3 - <<'PY'
+          import os, zipfile
+          zip_path = os.path.expanduser("~/.local/share/godot/export_templates/4.6.3.stable/android_source.zip")
+          target = "android/build"
+          with zipfile.ZipFile(zip_path) as zf:
+              names = [name for name in zf.namelist() if name and not name.endswith("/")]
+              prefixes = ["android_source/", "android/", "build/"]
+              prefix = ""
+              for candidate in prefixes:
+                  if any(name.startswith(candidate) for name in names):
+                      prefix = candidate
+                      break
+              for name in names:
+                  out_name = name[len(prefix):] if prefix and name.startswith(prefix) else name
+                  if not out_name:
+                      continue
+                  out_path = os.path.join(target, out_name)
+                  os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                  with zf.open(name) as src, open(out_path, "wb") as dst:
+                      dst.write(src.read())
+          PY
+          fi
+
+          touch android/.gdignore
+          find android -maxdepth 3 -type f | sort | sed -n '1,120p'
+          test -d android/build
+
+      - name: Export release AAB
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p build/android
+          godot --headless --verbose --path . --export-release "Android AAB" "build/android/${EXPORT_NAME}-release.aab"
+          test -f "build/android/${EXPORT_NAME}-release.aab"
+          ls -lh build/android
+
       - name: Upload AAB artifact
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: ${{ env.EXPORT_NAME }}-release-aab
           path: build/android/*.aab
