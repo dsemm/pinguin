@@ -56,9 +56,22 @@ O workflow `build-android.yml` já instala os export templates do Godot, configu
 
 O splash/icon do projeto usa `assets/icon.png`, pois o boot splash do Godot exige PNG.
 
-## v3 - Correção do build Android
+## v4 - Correção do build Android
 
 - Corrigida a falha de parse do `scripts/Game.gd` no GitHub Actions.
 - Variáveis locais que vinham de valores `Variant` agora têm tipagem explícita.
 - Trocas principais: `normal: Vector2`, `target_camera: float`, `hp_ratio: float`, `alpha: float` e arrays tipados.
 - O projeto também desativa `treat_warnings_as_errors` para evitar que warnings de CI interrompam o export Android.
+
+
+## Correção v4
+
+O workflow Android agora instala o Android build template manualmente extraindo `android_source.zip` em `android/build`, evitando falha silenciosa do comando `--install-android-build-template` em ambiente headless. Também detecta automaticamente `ANDROID_HOME` e `JAVA_HOME`, imprime os arquivos instalados e usa `set -euxo pipefail` nos passos críticos para mostrar a causa exata se uma nova falha acontecer.
+
+
+## Correção v6
+
+- `gradle_build/gradle_build_directory` agora aponta explicitamente para `res://android/build`.
+- O workflow instala `platforms;android-35` e `build-tools;35.0.0`.
+- O Android build template recebe `android/.gdignore` para não ser importado como recurso do projeto Godot.
+- O preset Android inclui campos `keystore/*` vazios para usar os fallbacks por variáveis de ambiente do CI.
