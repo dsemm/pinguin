@@ -14,8 +14,8 @@ jobs:
       image: barichello/godot-ci:4.6.3
     env:
       EXPORT_NAME: pinguins-x-focas
-      GODOT_VERSION: 4.6.3
-      GODOT_TEMPLATE_VERSION: 4.6.3.stable
+      GODOT_VERSION: "4.6.3"
+      GODOT_TEMPLATE_VERSION: "4.6.3.stable"
       KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -23,20 +23,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install runner dependencies
+      - name: Install Linux dependencies
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates wget unzip libfontconfig1
+          apt-get install -y --no-install-recommends \
+            ca-certificates \
+            wget \
+            unzip \
+            libfontconfig1 \
+            openjdk-17-jdk-headless
 
-      - name: Prepare folders and tool paths
+      - name: Prepare Android SDK, Java and export templates
         shell: bash
         run: |
           set -euxo pipefail
           mkdir -p build/android
           godot --version
-          echo "HOME=$HOME"
 
           RESOLVED_ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           if [ -z "$RESOLVED_ANDROID_HOME" ] || [ ! -d "$RESOLVED_ANDROID_HOME" ]; then
@@ -47,68 +51,65 @@ jobs:
               fi
             done
           fi
+          test -n "$RESOLVED_ANDROID_HOME"
+          test -d "$RESOLVED_ANDROID_HOME"
 
           RESOLVED_JAVA_HOME="${JAVA_HOME:-}"
           if [ -z "$RESOLVED_JAVA_HOME" ] || [ ! -d "$RESOLVED_JAVA_HOME" ]; then
             RESOLVED_JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
           fi
+          test -d "$RESOLVED_JAVA_HOME"
 
           echo "ANDROID_HOME=$RESOLVED_ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$RESOLVED_ANDROID_HOME" >> "$GITHUB_ENV"
           echo "JAVA_HOME=$RESOLVED_JAVA_HOME" >> "$GITHUB_ENV"
 
-          echo "Resolved ANDROID_HOME=$RESOLVED_ANDROID_HOME"
-          echo "Resolved JAVA_HOME=$RESOLVED_JAVA_HOME"
-          test -d "$RESOLVED_ANDROID_HOME"
-          test -d "$RESOLVED_JAVA_HOME"
-
-      - name: Install Android SDK packages
-        shell: bash
-        run: |
-          set -euxo pipefail
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          SDKMANAGER="$RESOLVED_ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           if [ ! -x "$SDKMANAGER" ]; then
             SDKMANAGER="$(command -v sdkmanager || true)"
           fi
           test -n "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          "$SDKMANAGER" \
+            "platform-tools" \
+            "build-tools;35.0.1" \
+            "platforms;android-35" \
+            "cmdline-tools;latest" \
+            "cmake;3.10.2.4988404" \
+            "ndk;28.1.13356709"
 
-      - name: Install Godot export templates
-        shell: bash
-        run: |
-          set -e
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}"
           mkdir -p "$TEMPLATE_DIR"
 
-          if [ -f "$TEMPLATE_DIR/android_source.zip" ]; then
-            echo "Android export template already exists in $TEMPLATE_DIR"
-            exit 0
+          if [ ! -f "$TEMPLATE_DIR/android_debug.apk" ] || [ ! -f "$TEMPLATE_DIR/android_release.apk" ] || [ ! -f "$TEMPLATE_DIR/android_source.zip" ]; then
+            for CANDIDATE in \
+              "/root/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}" \
+              "/root/.local/share/godot/templates/${GODOT_TEMPLATE_VERSION}" \
+              "/github/home/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}"; do
+              if [ -f "$CANDIDATE/android_source.zip" ]; then
+                cp -a "$CANDIDATE/." "$TEMPLATE_DIR/"
+                break
+              fi
+            done
           fi
 
-          # The barichello/godot-ci image may contain templates under another HOME.
-          for CANDIDATE in \
-            "/root/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}" \
-            "/github/home/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}"; do
-            if [ -f "$CANDIDATE/android_source.zip" ]; then
-              cp -av "$CANDIDATE/." "$TEMPLATE_DIR/"
-              echo "Copied export templates from $CANDIDATE"
-              exit 0
-            fi
-          done
+          if [ ! -f "$TEMPLATE_DIR/android_source.zip" ]; then
+            wget -q "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz" -O /tmp/godot_templates.tpz
+            unzip -q /tmp/godot_templates.tpz -d /tmp/godot_templates
+            cp -a /tmp/godot_templates/templates/. "$TEMPLATE_DIR/"
+          fi
 
-          echo "Downloading Godot export templates ${GODOT_VERSION}..."
-          wget -q "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz" -O /tmp/godot_templates.tpz
-          unzip -q /tmp/godot_templates.tpz -d /tmp/godot_templates
-          cp -av /tmp/godot_templates/templates/. "$TEMPLATE_DIR/"
+          test -f "$TEMPLATE_DIR/android_debug.apk"
+          test -f "$TEMPLATE_DIR/android_release.apk"
           test -f "$TEMPLATE_DIR/android_source.zip"
+          ls -lh "$TEMPLATE_DIR" | sed -n '1,80p'
 
-
-      - name: Generate Android debug keystore
+      - name: Configure Godot editor settings and keystores
         shell: bash
         run: |
-          set -e
-          mkdir -p "$HOME/.android"
+          set -euxo pipefail
+          mkdir -p "$HOME/.config/godot" "$HOME/.android"
+
           if [ ! -f "$HOME/.android/debug.keystore" ]; then
             keytool -genkeypair -v \
               -keystore "$HOME/.android/debug.keystore" \
@@ -120,65 +121,12 @@ jobs:
               -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
           fi
-          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$HOME/.android/debug.keystore" >> "$GITHUB_ENV"
-          echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
-          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
 
-      - name: Configure Godot Android editor settings
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p "$HOME/.config/godot"
-          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
-          [gd_resource type="EditorSettings" format=3]
-
-          [resource]
-          export/android/android_sdk_path = "$ANDROID_HOME"
-          export/android/java_sdk_path = "$JAVA_HOME"
-          export/android/debug_keystore = "$HOME/.android/debug.keystore"
-          export/android/debug_keystore_user = "androiddebugkey"
-          export/android/debug_keystore_pass = "android"
-          EOF
-          echo "--- editor_settings-4.tres ---"
-          cat "$HOME/.config/godot/editor_settings-4.tres"
-
-      - name: Install Android build template in project
-        shell: bash
-        run: |
-          set -euxo pipefail
-          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}"
-          test -f "$TEMPLATE_DIR/android_source.zip"
-
-          # Avoid the Godot CLI installer here because it can return exit code 1
-          # without printing a useful reason in some headless CI environments.
-          rm -rf android
-          mkdir -p android/build
-          touch android/.gdignore
-          unzip -q "$TEMPLATE_DIR/android_source.zip" -d android/build
-
-          # Some template archives include an android_source/ wrapper folder.
-          if [ -d android/build/android_source ]; then
-            shopt -s dotglob
-            mv android/build/android_source/* android/build/
-            rmdir android/build/android_source
-            shopt -u dotglob
-          fi
-
-          chmod +x android/build/gradlew || true
-          echo "--- Android build template files ---"
-          find android/build -maxdepth 2 -type f | sort | sed -n '1,80p'
-          test -f android/build/build.gradle || test -f android/build/build.gradle.kts
-
-      - name: Prepare signing keystore
-        shell: bash
-        run: |
-          set -e
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/upload-key.jks"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$GITHUB_WORKSPACE/upload-key.jks" >> "$GITHUB_ENV"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=${KEYSTORE_ALIAS}" >> "$GITHUB_ENV"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=${KEYSTORE_PASSWORD}" >> "$GITHUB_ENV"
-            echo "Using release keystore from repository secrets."
+            RELEASE_KEYSTORE="$GITHUB_WORKSPACE/upload-key.jks"
+            RELEASE_ALIAS="$KEYSTORE_ALIAS"
+            RELEASE_PASSWORD="$KEYSTORE_PASSWORD"
           else
             keytool -genkeypair -v \
               -keystore "$GITHUB_WORKSPACE/temp-release-key.jks" \
@@ -189,18 +137,48 @@ jobs:
               -keysize 2048 \
               -validity 10000 \
               -dname "CN=Temp,O=Toxic,C=BR"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$GITHUB_WORKSPACE/temp-release-key.jks" >> "$GITHUB_ENV"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=androiddebugkey" >> "$GITHUB_ENV"
-            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=android" >> "$GITHUB_ENV"
-            echo "Generated temporary release keystore. Use only for tests, not for Play Store production."
+            RELEASE_KEYSTORE="$GITHUB_WORKSPACE/temp-release-key.jks"
+            RELEASE_ALIAS="androiddebugkey"
+            RELEASE_PASSWORD="android"
           fi
+
+          {
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$HOME/.android/debug.keystore"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$RELEASE_KEYSTORE"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$RELEASE_ALIAS"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$RELEASE_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/debug_keystore = "$HOME/.android/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF
+
+          echo "--- editor_settings-4.tres ---"
+          cat "$HOME/.config/godot/editor_settings-4.tres"
+          echo "--- export_presets.cfg ---"
+          sed -n '1,240p' export_presets.cfg
+
+      - name: Validate Godot project import
+        shell: bash
+        run: |
+          set -euxo pipefail
+          timeout 90s godot --headless --verbose --path . --editor --quit || true
 
       - name: Export debug APK
         shell: bash
         run: |
           set -euxo pipefail
-          echo "--- export_presets.cfg ---"
-          sed -n '1,220p' export_presets.cfg
+          rm -rf android
+          mkdir -p build/android
           godot --headless --verbose --path . --export-debug "Android APK" "build/android/${EXPORT_NAME}-debug.apk"
           test -f "build/android/${EXPORT_NAME}-debug.apk"
           ls -lh build/android
@@ -209,18 +187,24 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          godot --headless --verbose --path . --export-release "Android AAB" "build/android/${EXPORT_NAME}-release.aab"
+          rm -rf android
+          mkdir -p build/android
+          godot --headless --verbose --path . --install-android-build-template --export-release "Android AAB" "build/android/${EXPORT_NAME}-release.aab"
           test -f "build/android/${EXPORT_NAME}-release.aab"
           ls -lh build/android
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: ${{ env.EXPORT_NAME }}-debug-apk
           path: build/android/*.apk
+          if-no-files-found: error
 
       - name: Upload AAB artifact
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: ${{ env.EXPORT_NAME }}-release-aab
           path: build/android/*.aab
+          if-no-files-found: error
