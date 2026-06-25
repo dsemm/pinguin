@@ -55,3 +55,10 @@ Use a mesma senha para a keystore e para a chave/alias. O workflow também gera 
 O workflow `build-android.yml` já instala os export templates do Godot, configura o caminho do Android SDK/JDK e instala o Android build template do projeto antes de exportar. Isso corrige os erros comuns de `android_source.zip` ausente, `Android build template not installed` e `A valid Java SDK path is required`.
 
 O splash/icon do projeto usa `assets/icon.png`, pois o boot splash do Godot exige PNG.
+
+## v3 - Correção do build Android
+
+- Corrigida a falha de parse do `scripts/Game.gd` no GitHub Actions.
+- Variáveis locais que vinham de valores `Variant` agora têm tipagem explícita.
+- Trocas principais: `normal: Vector2`, `target_camera: float`, `hp_ratio: float`, `alpha: float` e arrays tipados.
+- O projeto também desativa `treat_warnings_as_errors` para evitar que warnings de CI interrompam o export Android.

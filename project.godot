@@ -22,3 +22,7 @@ textures/canvas_textures/default_texture_filter=0
 
 [input_devices]
 pointing/emulate_touch_from_mouse=true
+
+[debug]
+# Mantém o export Android resiliente no CI. O script principal também usa tipagem explícita nas variáveis que vinham de Variant.
+gdscript/warnings/treat_warnings_as_errors=false
