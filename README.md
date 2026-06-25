@@ -48,3 +48,10 @@ Para assinar com sua chave real, adicione estes secrets no GitHub:
 - `ANDROID_KEYSTORE_PASSWORD`
 
 Use a mesma senha para a keystore e para a chave/alias. O workflow também gera uma keystore temporária quando esses secrets não existem. Essa keystore temporária serve apenas para teste.
+
+
+## Correção do GitHub Actions Android
+
+O workflow `build-android.yml` já instala os export templates do Godot, configura o caminho do Android SDK/JDK e instala o Android build template do projeto antes de exportar. Isso corrige os erros comuns de `android_source.zip` ausente, `Android build template not installed` e `A valid Java SDK path is required`.
+
+O splash/icon do projeto usa `assets/icon.png`, pois o boot splash do Godot exige PNG.
