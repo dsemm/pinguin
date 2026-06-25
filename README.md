@@ -88,3 +88,12 @@ Esta versão separa o APK do AAB da forma correta para Godot:
 
 Para testar rapidamente no celular, use o artifact `pinguins-x-focas-debug-apk`.
 Para Play Console, use o artifact `pinguins-x-focas-release-aab` e configure os secrets da keystore real antes de publicar.
+
+## Correção v8
+
+Esta versão separa corretamente os presets Android:
+
+- `Android APK`: exportação padrão, sem Gradle e sem override de `min_sdk`/`target_sdk`.
+- `Android AAB`: exportação com Gradle, mantendo `min_sdk=23` e `target_sdk=35` para Play Store.
+
+O workflow também cria `editor_settings-4.tres` e `editor_settings-4.6.tres`, instala OpenJDK 17, Android SDK 35, Build Tools 35.0.1, CMake e NDK r28b, seguindo os requisitos atuais de exportação Android do Godot 4.6.
