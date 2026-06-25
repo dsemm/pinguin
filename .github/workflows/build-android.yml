@@ -1,0 +1,77 @@
+name: Build Android APK and AAB
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+
+jobs:
+  android:
+    name: Godot Android Export
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.6.3
+    env:
+      EXPORT_NAME: pinguins-x-focas
+      KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare folders
+        run: |
+          mkdir -p build/android
+          godot --version
+
+      - name: Prepare signing keystore
+        shell: bash
+        run: |
+          set -e
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/upload-key.jks"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$GITHUB_WORKSPACE/upload-key.jks" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=${KEYSTORE_ALIAS}" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=${KEYSTORE_PASSWORD}" >> "$GITHUB_ENV"
+            echo "Using release keystore from repository secrets."
+          else
+            keytool -genkeypair -v \
+              -keystore "$GITHUB_WORKSPACE/temp-release-key.jks" \
+              -storepass android \
+              -keypass android \
+              -alias androiddebugkey \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Temp,O=Toxic,C=BR"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$GITHUB_WORKSPACE/temp-release-key.jks" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=androiddebugkey" >> "$GITHUB_ENV"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=android" >> "$GITHUB_ENV"
+            echo "Generated temporary keystore. Use only for testing, not for Play Store production."
+          fi
+
+      - name: Import Android build template
+        run: |
+          godot --headless --path . --install-android-build-template --quit
+
+      - name: Export debug APK
+        run: |
+          godot --headless --verbose --path . --export-debug "Android APK" "build/android/${EXPORT_NAME}-debug.apk"
+
+      - name: Export release AAB
+        run: |
+          godot --headless --verbose --path . --export-release "Android AAB" "build/android/${EXPORT_NAME}-release.aab"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.EXPORT_NAME }}-debug-apk
+          path: build/android/*.apk
+
+      - name: Upload AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.EXPORT_NAME }}-release-aab
+          path: build/android/*.aab
