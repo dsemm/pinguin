@@ -14,6 +14,8 @@ jobs:
       image: barichello/godot-ci:4.6.3
     env:
       EXPORT_NAME: pinguins-x-focas
+      GODOT_VERSION: 4.6.3
+      GODOT_TEMPLATE_VERSION: 4.6.3.stable
       KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -21,10 +23,96 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare folders
+      - name: Install runner dependencies
+        shell: bash
         run: |
+          set -e
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates wget unzip libfontconfig1
+
+      - name: Prepare folders
+        shell: bash
+        run: |
+          set -e
           mkdir -p build/android
           godot --version
+          echo "HOME=$HOME"
+          echo "JAVA_HOME=${JAVA_HOME:-}"
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+
+      - name: Install Godot export templates
+        shell: bash
+        run: |
+          set -e
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}"
+          mkdir -p "$TEMPLATE_DIR"
+
+          if [ -f "$TEMPLATE_DIR/android_source.zip" ]; then
+            echo "Android export template already exists in $TEMPLATE_DIR"
+            exit 0
+          fi
+
+          # The barichello/godot-ci image may contain templates under another HOME.
+          for CANDIDATE in \
+            "/root/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}" \
+            "/github/home/.local/share/godot/export_templates/${GODOT_TEMPLATE_VERSION}"; do
+            if [ -f "$CANDIDATE/android_source.zip" ]; then
+              cp -av "$CANDIDATE/." "$TEMPLATE_DIR/"
+              echo "Copied export templates from $CANDIDATE"
+              exit 0
+            fi
+          done
+
+          echo "Downloading Godot export templates ${GODOT_VERSION}..."
+          wget -q "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz" -O /tmp/godot_templates.tpz
+          unzip -q /tmp/godot_templates.tpz -d /tmp/godot_templates
+          cp -av /tmp/godot_templates/templates/. "$TEMPLATE_DIR/"
+          test -f "$TEMPLATE_DIR/android_source.zip"
+
+
+      - name: Generate Android debug keystore
+        shell: bash
+        run: |
+          set -e
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -keypass android \
+              -alias androiddebugkey \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$HOME/.android/debug.keystore" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
+
+      - name: Configure Godot Android editor settings
+        shell: bash
+        run: |
+          set -e
+          mkdir -p "$HOME/.config/godot"
+          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "${ANDROID_HOME:-/opt/android-sdk}"
+          export/android/java_sdk_path = "${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
+          export/android/debug_keystore = "$HOME/.android/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF
+
+      - name: Install Android build template in project
+        shell: bash
+        run: |
+          set -e
+          rm -rf android
+          godot --headless --path . --install-android-build-template --quit
+          test -f android/build/build.gradle || test -f android/build/build.gradle.kts
 
       - name: Prepare signing keystore
         shell: bash
@@ -49,20 +137,22 @@ jobs:
             echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$GITHUB_WORKSPACE/temp-release-key.jks" >> "$GITHUB_ENV"
             echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=androiddebugkey" >> "$GITHUB_ENV"
             echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=android" >> "$GITHUB_ENV"
-            echo "Generated temporary keystore. Use only for testing, not for Play Store production."
+            echo "Generated temporary release keystore. Use only for tests, not for Play Store production."
           fi
 
-      - name: Import Android build template
-        run: |
-          godot --headless --path . --install-android-build-template --quit
-
       - name: Export debug APK
+        shell: bash
         run: |
+          set -e
           godot --headless --verbose --path . --export-debug "Android APK" "build/android/${EXPORT_NAME}-debug.apk"
+          test -f "build/android/${EXPORT_NAME}-debug.apk"
 
       - name: Export release AAB
+        shell: bash
         run: |
+          set -e
           godot --headless --verbose --path . --export-release "Android AAB" "build/android/${EXPORT_NAME}-release.aab"
+          test -f "build/android/${EXPORT_NAME}-release.aab"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
